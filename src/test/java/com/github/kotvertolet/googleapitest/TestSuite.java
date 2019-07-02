@@ -1,8 +1,11 @@
 package com.github.kotvertolet.googleapitest;
 
+import com.github.kotvertolet.googleapitest.common.BaseTest;
+import com.github.kotvertolet.googleapitest.common.SearchScope;
 import com.github.kotvertolet.googleapitest.model.Volume;
 import com.github.kotvertolet.googleapitest.model.VolumesResponse;
 import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.junit.Assert;
 import org.junit.Test;
 
 import java.util.*;
@@ -15,19 +18,30 @@ public class TestSuite extends BaseTest {
 
     private String maskForOneBook = "There is %s book by %s";
     private String maskForManyBooks = "There are %s books by %s";
+    private String maskVolumeIsAbsent = "Volume with name %s by %s is absent in volumeResponseForAuthor";
 
     @Test
     public void volumesTest() {
-        VolumesResponse volumesResponse = getAllVolumesByName("омон ра");
-        Set<String> authors = volumesResponse.getVolumes()
+        VolumesResponse volumeResponseByVolumeName = getAllVolumesByQuery("java", SearchScope.IN_TITLE);
+
+        Assert.assertNotNull(volumeResponseByVolumeName);
+        Assert.assertNotNull(volumeResponseByVolumeName.getVolumes());
+        Assert.assertTrue(volumeResponseByVolumeName.getVolumes().size() > 0);
+
+        Set<String> authors = volumeResponseByVolumeName.getVolumes()
                 .stream()
                 .flatMap(v ->
-                        Optional.ofNullable(v.getVolumeInfo().getAuthors()).map(Collection::stream).orElseGet(Stream::empty))
+                        Optional.ofNullable(v.getVolumeInfo().getAuthors())
+                                .map(Collection::stream)
+                                .orElseGet(Stream::empty))
                 .collect(Collectors.toSet());
 
-        Map<String, List<Volume>> volumesBuAuthorMap = authors.stream()
+        Assert.assertTrue("Authors set is empty", authors.size() > 0);
+
+        Map<String, List<Volume>> volumesByAuthorsMap = authors
+                .stream()
                 .flatMap(author -> {
-                    List<Volume> volumesByAuthor = volumesResponse.getVolumes()
+                    List<Volume> volumesByAuthor = volumeResponseByVolumeName.getVolumes()
                             .stream()
                             .filter(volume -> {
                                 List<String> volumeAuthors = volume.getVolumeInfo().getAuthors();
@@ -38,25 +52,37 @@ public class TestSuite extends BaseTest {
                 })
                 .collect(Collectors.toMap(ImmutablePair::getLeft, ImmutablePair::getRight));
 
-        volumesBuAuthorMap.entrySet().stream().forEach(entry -> {
-            int volumesNumber = entry.getValue().size();
+        volumesByAuthorsMap.forEach((key, value) -> {
+            int volumesNumber = value.size();
             String message;
             if (volumesNumber > 1) {
-                message = String.format(maskForManyBooks, volumesNumber, entry.getKey());
+                message = String.format(maskForManyBooks, volumesNumber, key);
             } else {
-                message = String.format(maskForOneBook, volumesNumber, entry.getKey());
+                message = String.format(maskForOneBook, volumesNumber, key);
             }
             System.out.println(message);
         });
 
+        String selectedAuthor = authors.stream().findFirst().get();
+        VolumesResponse volumeResponseForAuthor = getAllVolumesByQuery(selectedAuthor, SearchScope.IN_AUTHOR);
+
+        Assert.assertNotNull(volumeResponseForAuthor);
+        Assert.assertNotNull(volumeResponseForAuthor.getVolumes());
+        Assert.assertTrue(volumeResponseForAuthor.getVolumes().size() > 0);
+
+        List<String> volumeIds = volumeResponseForAuthor.getVolumes().stream().map(Volume::getId).collect(Collectors.toList());
+        volumesByAuthorsMap.get(selectedAuthor).forEach(v ->
+                Assert.assertTrue(
+                        String.format(maskVolumeIsAbsent, v.getVolumeInfo().getTitle(), selectedAuthor),
+                        volumeIds.contains(v.getId())));
     }
 
-    private VolumesResponse getAllVolumesByName(String name) {
+    private VolumesResponse getAllVolumesByQuery(String query, SearchScope scope) {
         int startIndex = 0;
         VolumesResponse response = null;
         while (true) {
             VolumesResponse tempResponse = given()
-                    .param("q", name)
+                    .param("q", query + scope.getValue())
                     .param("maxResults", 40)
                     .param("startIndex", startIndex)
                     .get("volumes")
@@ -65,7 +91,6 @@ public class TestSuite extends BaseTest {
             if (tempResponse.getVolumes() == null) {
                 break;
             }
-
             if (response == null) {
                 response = tempResponse;
             } else {
